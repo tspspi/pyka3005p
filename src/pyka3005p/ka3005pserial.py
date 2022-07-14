@@ -11,7 +11,8 @@ class KA3005PSerial(powersupply.PowerSupply):
 
 		debug = False,
 		timeoutRetry = 3,
-		readbackRetry = 3
+		readbackRetry = 3,
+		serialCommandDelay = 0.1
 	):
 		super().__init__(
 			nChannels = 1,
@@ -28,6 +29,7 @@ class KA3005PSerial(powersupply.PowerSupply):
 		self._debug = debug
 		self._timeoutRetry = timeoutRetry
 		self._readbackRetry = readbackRetry
+		self._serialCommandDelay = serialCommandDelay
 
 		if isinstance(port, serial.Serial):
 			self._port = port
@@ -52,8 +54,9 @@ class KA3005PSerial(powersupply.PowerSupply):
 	def __enter__(self):
 		# Open the serial port / pipe in case we should open it ourself
 		if (self._port is None) and (not (self._portName is None)):
-			self._port = serial.Serial(port, baudrate=19200, bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE, timeout=1)
+			self._port = serial.Serial(self._portName, baudrate=19200, bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE, timeout=1)
 			self.__initialRequests()
+		return self
 
 	def __exit__(self, exc_type, exc_val, exc_tb):
 		# Close the port if we have opened it ourself and it's currently opened
@@ -71,7 +74,7 @@ class KA3005PSerial(powersupply.PowerSupply):
 	def _sendCommand(self, cmd):
 		if self._debug:
 			print("PSU> {}".format(cmd))
-		sleep(0.1)
+		sleep(self._serialCommandDelay)
 		self._port.write(cmd.encode('ascii'))
 
 	def _sendCommandReply(self, cmd, replyLen = None):
@@ -79,7 +82,7 @@ class KA3005PSerial(powersupply.PowerSupply):
 
 		if self._debug:
 			print("PSU> {}".format(cmd))
-		sleep(0.1)
+		sleep(self._serialCommandDelay)
 		self._port.write(cmd.encode('ascii'))
 
 		res = []
@@ -87,7 +90,7 @@ class KA3005PSerial(powersupply.PowerSupply):
 			c = self._port.read(1).decode('ascii')
 			if len(c) <= 0:
 				if self._debug:
-					print("PSU Timeout")
+					print("PSU Timeout, received {} until now".format(res))
 				if (not (retries is None)):
 					if retries > 0:
 						retries = retries - 1
@@ -99,7 +102,7 @@ class KA3005PSerial(powersupply.PowerSupply):
 
 			res.append(c)
 			if not (replyLen is None):
-				if len(c) == replyLen:
+				if len(res) == replyLen:
 					break
 
 		reply = "".join(res)
@@ -122,7 +125,7 @@ class KA3005PSerial(powersupply.PowerSupply):
 
 			# Read back status ...
 			repl = self._sendCommandReply("STATUS?", replyLen = 1)
-			if ((repl & 0x40 == 0) and not enable) or ((repl & 0x40 != 0) and enable):
+			if ((ord(repl) & 0x40 == 0) and not enable) or ((ord(repl) & 0x40 != 0) and enable):
 				return True
 
 			print("PSU Readback failed")
@@ -149,7 +152,7 @@ class KA3005PSerial(powersupply.PowerSupply):
 					print("PSU Failed to parse response on VSET? after setting")
 				readVoltage = None
 
-			if readVoltage == voltage:
+			if abs(readVoltage - voltage) < 1e-2:
 				return True
 
 			print("PSU Mismatch of set and read back voltage (set {}, read {})".format(voltage, readVoltage))
@@ -166,7 +169,7 @@ class KA3005PSerial(powersupply.PowerSupply):
 			self._sendCommand("ISET{0}:{1:05.3f}".format(channel, current))
 
 			# Read back status
-			repl = self._sendCommandReply("ISET{0}?".format(channel), replyLen = 6)
+			repl = self._sendCommandReply("ISET{0}?".format(channel), replyLen = 5)
 
 			try:
 				readCurrent = float(repl[:5])
@@ -175,7 +178,7 @@ class KA3005PSerial(powersupply.PowerSupply):
 					print("PSU Failed to parse response on ISET? after setting")
 				readCurrent = None
 
-			if readCurrent == current:
+			if abs(readCurrent - current) < 1e-2:
 				return True
 
 			print("PSU Mismatch of set and read back current (set {}, read {})".format(current, readCurrent))
@@ -205,12 +208,15 @@ class KA3005PSerial(powersupply.PowerSupply):
 
 	def _getLimitMode(self, channel):
 		repl = self._sendCommandReply("STATUS?", replyLen = 1)
+		if len(repl) <= 0:
+			raise IOError("Unknown status response {}".format(repl))
+		repl = ord(repl)
 		if (repl & 0x40) == 0:
-			return PowerSupplyLimit.NONE
+			return powersupply.PowerSupplyLimit.NONE
 		if (repl & 0x01) == 0:
-			return PowerSupplyLimit.CURRENT
+			return powersupply.PowerSupplyLimit.CURRENT
 		else:
-			return PowerSupplyLimit.VOLTAGE
+			return powersupply.PowerSupplyLimit.VOLTAGE
 
 	def _isConnected(self):
 		if not (self._port is None):
