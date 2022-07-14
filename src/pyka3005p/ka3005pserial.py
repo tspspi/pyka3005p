@@ -42,6 +42,8 @@ class KA3005PSerial(powersupply.PowerSupply):
 		atexit.register(self.__close)
 
 	def __initialRequests(self):
+		# Query the identity and do a check this is a KA3005P
+		self._idn(initialQuery = True)
 		# Disable output, disable overcurrent and overvoltage protection
 		self._sendCommand("OUT0")
 		self._sendCommand("OCP0")
@@ -89,6 +91,9 @@ class KA3005PSerial(powersupply.PowerSupply):
 		while True:
 			c = self._port.read(1).decode('ascii')
 			if len(c) <= 0:
+				if replyLen < 0:
+					break
+
 				if self._debug:
 					print("PSU Timeout, received {} until now".format(res))
 				if (not (retries is None)):
@@ -113,6 +118,31 @@ class KA3005PSerial(powersupply.PowerSupply):
 		return reply
 
 	# Communication functions
+
+	def _idn(self, initialQuery = False):
+		repl = self._sendCommandReply("*IDN?", replyLen = -1)
+
+		if len(repl) != 30:
+			raise IOError("Unknown IDN response {}, not a KORAD KA3005P?".format(repl))
+		if repl[:len("KORAD KA3005P")] != "KORAD KA3005P":
+			raise IOError("Unknown IDN response {}, not a KORAD KA3005P?".format(repl))
+
+		sn = repl[22:]
+		ver = repl[15:18]
+
+		if self._debug:
+			print("PSU: Serial {}, version {}".format(sn, ver))
+
+		if initialQuery:
+			self._serialNumber = sn
+			self._softwareVersion = ver
+
+		return {
+			'idn' : repl,
+			'serial' : sn,
+			'version' : ver
+		}
+
 
 	def _setChannelEnable(self, enable, channel):
 		retries = self._readbackRetry
