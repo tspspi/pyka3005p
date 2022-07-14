@@ -79,7 +79,7 @@ class KA3005PSerial(powersupply.PowerSupply):
 		sleep(self._serialCommandDelay)
 		self._port.write(cmd.encode('ascii'))
 
-	def _sendCommandReply(self, cmd, replyLen = None):
+	def _sendCommandReply(self, cmd, replyLen = None, binary = False):
 		retries = self._timeoutRetry
 
 		if self._debug:
@@ -89,7 +89,11 @@ class KA3005PSerial(powersupply.PowerSupply):
 
 		res = []
 		while True:
-			c = self._port.read(1).decode('ascii')
+			if not binary:
+				c = self._port.read(1).decode('ascii')
+			else:
+				c = self._port.read(1)
+
 			if len(c) <= 0:
 				if replyLen < 0:
 					break
@@ -110,7 +114,10 @@ class KA3005PSerial(powersupply.PowerSupply):
 				if len(res) == replyLen:
 					break
 
-		reply = "".join(res)
+		if not binary:
+			reply = "".join(res)
+		else:
+			reply = res
 
 		if self._debug:
 			print("PSU< {}".format(reply))
@@ -154,9 +161,11 @@ class KA3005PSerial(powersupply.PowerSupply):
 				self._sendCommand("OUT0")
 
 			# Read back status ...
-			repl = self._sendCommandReply("STATUS?", replyLen = 1)
-			if ((ord(repl) & 0x40 == 0) and not enable) or ((ord(repl) & 0x40 != 0) and enable):
-				return True
+			repl = self._sendCommandReply("STATUS?", replyLen = 1, binary = True)
+			if len(repl) == 1:
+				repl = int.from_bytes(repl[0], "little")
+				if ((repl & 0x40 == 0) and not enable) or ((repl & 0x40 != 0) and enable):
+					return True
 
 			print("PSU Readback failed")
 
@@ -237,10 +246,10 @@ class KA3005PSerial(powersupply.PowerSupply):
 		return True
 
 	def _getLimitMode(self, channel):
-		repl = self._sendCommandReply("STATUS?", replyLen = 1)
-		if len(repl) <= 0:
+		repl = self._sendCommandReply("STATUS?", replyLen = 1, binary = True)
+		if len(repl) != 1:
 			raise IOError("Unknown status response {}".format(repl))
-		repl = ord(repl)
+		repl = int.from_bytes(repl[0], "little")
 		if (repl & 0x40) == 0:
 			return powersupply.PowerSupplyLimit.NONE
 		if (repl & 0x01) == 0:
@@ -253,3 +262,53 @@ class KA3005PSerial(powersupply.PowerSupply):
 			return True
 		else:
 			return False
+
+	def _protectionOverCurrentEnable(self, enabled, channel = 1):
+		retries = self._readbackRetry
+
+		while True:
+			if enabled:
+				self._sendCommand("OCP1")
+			else:
+				self._sendCommand("OCP0")
+
+			# Read back status
+			repl = self._sendCommandReply("STATUS?", replyLen = 1, binary = True)
+			if len(repl) != 1:
+				raise IOError("Unknown status response {}".format(repl))
+			repl = int.from_bytes(repl[0], "little")
+
+			if (enabled and ((repl & 0x10) == 0)) or ((not enabled) and ((repl & 0x10) != 0)):
+				return True
+
+			if retries > 0:
+				retries = retries - 1
+				if retries == 0:
+					raise IOError("Failed to set overcurrent protection to {} and read back correct state (returned {})".format(enabled, repl))
+				retries = retries - 1
+
+	def _protectionOverVoltageEnable(self, enabled, channel = 1):
+		retries = self._readbackRetry
+
+		while True:
+			if enabled:
+				self._sendCommand("OVP1")
+			else:
+				self._sendCommand("OVP0")
+
+			sleep(1)
+
+			# Read back status
+			repl = self._sendCommandReply("STATUS?", replyLen = 1, binary = True)
+			if len(repl) != 1:
+				raise IOError("Unknown status response {}".format(repl))
+			repl = int.from_bytes(repl[0], "little")
+
+			if (enabled and ((repl & 0x80) != 0)) or ((not enabled) and ((repl & 0x80) == 0)):
+				return True
+
+			if retries > 0:
+				retries = retries - 1
+				if retries == 0:
+					raise IOError("Failed to set overvoltage protection to {} and read back correct state".format(enabled))
+				retries = retries - 1
