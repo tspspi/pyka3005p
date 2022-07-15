@@ -54,15 +54,23 @@ class KA3005PSerial(powersupply.PowerSupply):
 	# Context management
 
 	def __enter__(self):
+		if self._usedConnect:
+			raise ValueError("Cannot use context management (with) on a connected port")
+
 		# Open the serial port / pipe in case we should open it ourself
 		if (self._port is None) and (not (self._portName is None)):
 			self._port = serial.Serial(self._portName, baudrate=19200, bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE, timeout=1)
 			self.__initialRequests()
+
+		self._usesContext = True
+
 		return self
 
 	def __exit__(self, exc_type, exc_val, exc_tb):
 		# Close the port if we have opened it ourself and it's currently opened
 		self.__close()
+
+		self._usesContext = False
 
 	def __close(self):
 		atexit.unregister(self.__close)
@@ -70,6 +78,21 @@ class KA3005PSerial(powersupply.PowerSupply):
 			self._off()
 			self._port.close()
 			self._port = None
+
+	# Connect / Disconnect
+
+	def _connect(self):
+		if (self._port is None) and (not (self._portName is None)):
+			self._port = serial.Serial(self._portName, baudrate=19200, bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE, timeout=1)
+			self.__initialRequests()
+
+		return True
+
+	def _disconnect(self):
+		if not (self._port is None):
+			self.__close()
+
+		return True
 
 	# Utility functions
 
